@@ -1,0 +1,87 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>e-Stat Web Data Connector</title>
+    <meta charset="UTF-8">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            var myConnector = tableau.makeConnector();
+
+            myConnector.getSchema = function(schemaCallback) {
+                var cols = [{
+                    id: "time",
+                    alias: "Time",
+                    dataType: tableau.dataTypeEnum.string
+                }, {
+                    id: "area",
+                    alias: "Area",
+                    dataType: tableau.dataTypeEnum.string
+                }, {
+                    id: "value",
+                    alias: "Value",
+                    dataType: tableau.dataTypeEnum.float
+                }];
+
+                var tableSchema = {
+                    id: "estatData",
+                    alias: "e-Stat Data",
+                    columns: cols
+                };
+
+                schemaCallback([tableSchema]);
+            };
+
+            myConnector.getData = function(table, doneCallback) {
+                var apiUrl = "https://api.e-stat.go.jp/rest/3.0/app/getStatsData?appId=" + tableau.connectionData.appId + "&lang=J&statsDataId=" + tableau.connectionData.statsDataId + "&metaGetFlg=Y&cntGetFlg=N&explanationGetFlg=Y&annotationGetFlg=Y&sectionHeaderFlg=1&replaceSpChars=0&format=json";
+
+                $("#status").text("データ取得中...");
+
+                $.getJSON(apiUrl, function(resp) {
+                    var tableData = [];
+
+                    var data = resp.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE;
+
+                    for (var i = 0; i < data.length; i++) {
+                        tableData.push({
+                            "time": data[i]["@time"],
+                            "area": data[i]["@area"],
+                            "value": parseFloat(data[i]["$"])
+                        });
+                    }
+
+                    table.appendRows(tableData);
+                    doneCallback();
+                    $("#status").text("データ取得完了！");
+                }).fail(function() {
+                    $("#status").text("データ取得に失敗しました。APIキーやIDを確認してください。");
+                });
+            };
+
+            tableau.registerConnector(myConnector);
+
+            $("#submitButton").click(function() {
+                tableau.connectionData = {
+                    appId: $("#appId").val().trim(),
+                    statsDataId: $("#statsDataId").val().trim()
+                };
+                tableau.connectionName = "e-Stat Data";
+                tableau.submit();
+            });
+        });
+    </script>
+</head>
+<body>
+    <h1>e-Stat Web Data Connector</h1>
+    <p>APIキーと統計データIDを入力してください。</p>
+    <form>
+        <label for="appId">APIキー:</label>
+        <input type="text" id="appId" name="appId"><br><br>
+        <label for="statsDataId">統計データID:</label>
+        <input type="text" id="statsDataId" name="statsDataId"><br><br>
+        <input type="button" id="submitButton" value="Fetch Data">
+    </form>
+    <div id="status" style="margin-top: 20px; color: #333;"></div>
+</body>
+</html>
