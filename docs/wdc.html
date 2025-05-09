@@ -1,29 +1,48 @@
-
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <title>e-Stat Web Data Connector</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <script src="https://connectors.tableau.com/libs/tableauwdc-2.3.latest.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <script>
         $(document).ready(function() {
             var myConnector = tableau.makeConnector();
 
             myConnector.getSchema = function(schemaCallback) {
-                var cols = [{
-                    id: "time",
-                    alias: "Time",
-                    dataType: tableau.dataTypeEnum.string
-                }, {
-                    id: "area",
-                    alias: "Area",
-                    dataType: tableau.dataTypeEnum.string
-                }, {
-                    id: "value",
-                    alias: "Value",
-                    dataType: tableau.dataTypeEnum.float
-                }];
+                var cols = [];
+                var sampleData = JSON.parse(tableau.connectionData.sampleData); // サンプルデータから列情報を取得
+
+                if (sampleData && sampleData.length > 0) {
+                    for (var key in sampleData[0]) {
+                        if (sampleData[0].hasOwnProperty(key)) {
+                            let dataType = tableau.dataTypeEnum.string; // デフォルトは文字列
+                            if (key === "$" || key.toLowerCase() === "value") {
+                                dataType = tableau.dataTypeEnum.float;
+                            }
+                            cols.push({
+                                id: key,
+                                alias: key, // とりあえず同じ名前をエイリアスに
+                                dataType: dataType
+                            });
+                        }
+                    }
+                } else {
+                    // サンプルデータがない場合のデフォルトの列 (最低限)
+                    cols = [{
+                        id: "time",
+                        alias: "Time",
+                        dataType: tableau.dataTypeEnum.string
+                    }, {
+                        id: "area",
+                        alias: "Area",
+                        dataType: tableau.dataTypeEnum.string
+                    }, {
+                        id: "value",
+                        alias: "Value",
+                        dataType: tableau.dataTypeEnum.float
+                    }];
+                }
 
                 var tableSchema = {
                     id: "estatData",
@@ -35,29 +54,53 @@
             };
 
             myConnector.getData = function(table, doneCallback) {
-                var apiUrl = "https://api.e-stat.go.jp/rest/3.0/app/getStatsData?appId=" + tableau.connectionData.appId + "&lang=J&statsDataId=" + tableau.connectionData.statsDataId + "&metaGetFlg=Y&cntGetFlg=N&explanationGetFlg=Y&annotationGetFlg=Y&sectionHeaderFlg=1&replaceSpChars=0&format=json";
+                var appId = tableau.connectionData.appId;
+                var apiUrl = tableau.connectionData.apiUrl;
+                var startPosition = 1;
+                var tableData = [];
+
+                function fetchData() {
+                    $.getJSON(apiUrl + startPosition, function(resp) {
+                         if (!resp || !resp.GET_STATS_DATA || !resp.GET_STATS_DATA.STATISTICAL_DATA || !resp.GET_STATS_DATA.DATA_INF || !resp.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) {
+                            $("#status").text("データ構造が予期せぬ形式です。APIレスポンスを確認してください。");
+                            return;
+                        }
+
+                        var data = resp.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE;
+                        if (data && data.length > 0) {
+                            // サンプルデータを tableau.connectionData に格納 (最初の10件)
+                            tableau.connectionData.sampleData = JSON.stringify(data.slice(0, 10));
+
+                            for (var i = 0; i < data.length; i++) {
+                                var row = {};
+                                for (var key in data[i]) {
+                                    if (data[i].hasOwnProperty(key)) {
+                                        row[key] = (key === "$" || key.toLowerCase() === "value") ? parseFloat(data[i][key]) : data[i][key];
+                                    }
+                                }
+                                tableData.push(row);
+                            }
+
+                            if (data.length > 0) {
+                                startPosition += data.length;
+                                fetchData();
+                            } else {
+                                table.appendRows(tableData);
+                                doneCallback();
+                                $("#status").text("データ取得完了！");
+                            }
+                        } else {
+                            $("#status").text("データがありません。");
+                            table.appendRows([]);
+                            doneCallback();
+                        }
+                    }).fail(function() {
+                        $("#status").text("データ取得に失敗しました。APIキーやURLを確認してください。");
+                    });
+                }
 
                 $("#status").text("データ取得中...");
-
-                $.getJSON(apiUrl, function(resp) {
-                    var tableData = [];
-
-                    var data = resp.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE;
-
-                    for (var i = 0; i < data.length; i++) {
-                        tableData.push({
-                            "time": data[i]["@time"],
-                            "area": data[i]["@area"],
-                            "value": parseFloat(data[i]["$"])
-                        });
-                    }
-
-                    table.appendRows(tableData);
-                    doneCallback();
-                    $("#status").text("データ取得完了！");
-                }).fail(function() {
-                    $("#status").text("データ取得に失敗しました。APIキーやIDを確認してください。");
-                });
+                fetchData();
             };
 
             tableau.registerConnector(myConnector);
@@ -65,7 +108,7 @@
             $("#submitButton").click(function() {
                 tableau.connectionData = {
                     appId: $("#appId").val().trim(),
-                    statsDataId: $("#statsDataId").val().trim()
+                    apiUrl: $("#apiUrl").val().trim()
                 };
                 tableau.connectionName = "e-Stat Data";
                 tableau.submit();
@@ -75,12 +118,12 @@
 </head>
 <body>
     <h1>e-Stat Web Data Connector</h1>
-    <p>APIキーと統計データIDを入力してください。</p>
+    <p>APIキーとAPIリクエストURLを入力してください。</p>
     <form>
         <label for="appId">APIキー:</label>
         <input type="text" id="appId" name="appId"><br><br>
-        <label for="statsDataId">統計データID:</label>
-        <input type="text" id="statsDataId" name="statsDataId"><br><br>
+        <label for="apiUrl">APIリクエストURL (startPositionパラメータを除く):</label>
+        <input type="text" id="apiUrl" name="apiUrl"><br><br>
         <input type="button" id="submitButton" value="Fetch Data">
     </form>
     <div id="status" style="margin-top: 20px; color: #333;"></div>
