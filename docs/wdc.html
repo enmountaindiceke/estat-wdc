@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>e-Stat Web Data Connector</title>
+    <title>e-Stat Web Data Connector (Multiple Tables)</title>
     <script src="https://connectors.tableau.com/libs/tableauwdc-2.3.latest.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <script>
@@ -10,26 +10,26 @@
             var myConnector = tableau.makeConnector();
 
             myConnector.getSchema = function(schemaCallback) {
-                var cols = [];
-                var sampleData = JSON.parse(tableau.connectionData.sampleData); // サンプルデータから列情報を取得
+                // データテーブルのスキーマ
+                var dataCols = [];
+                var sampleData = JSON.parse(tableau.connectionData.sampleData);
 
                 if (sampleData && sampleData.length > 0) {
                     for (var key in sampleData[0]) {
                         if (sampleData[0].hasOwnProperty(key)) {
-                            let dataType = tableau.dataTypeEnum.string; // デフォルトは文字列
+                            let dataType = tableau.dataTypeEnum.string;
                             if (key === "$" || key.toLowerCase() === "value") {
                                 dataType = tableau.dataTypeEnum.float;
                             }
-                            cols.push({
-                                id: key,
-                                alias: key, // とりあえず同じ名前をエイリアスに
+                            dataCols.push({
+                                id: key.replace("@", ""), // "@" を削除
+                                alias: key.replace("@", ""),
                                 dataType: dataType
                             });
                         }
                     }
                 } else {
-                    // サンプルデータがない場合のデフォルトの列 (最低限)
-                    cols = [{
+                    dataCols = [{
                         id: "time",
                         alias: "Time",
                         dataType: tableau.dataTypeEnum.string
@@ -44,13 +44,30 @@
                     }];
                 }
 
-                var tableSchema = {
+                var dataTableSchema = {
                     id: "estatData",
                     alias: "e-Stat Data",
-                    columns: cols
+                    columns: dataCols
                 };
 
-                schemaCallback([tableSchema]);
+                // メタ情報テーブルのスキーマ (例: CLASS_INF)
+                var metaCols = [{
+                    id: "class_cat",
+                    alias: "Class Category",
+                    dataType: tableau.dataTypeEnum.string
+                }, {
+                    id: "class_name",
+                    alias: "Class Name",
+                    dataType: tableau.dataTypeEnum.string
+                }];
+
+                var metaTableSchema = {
+                    id: "estatMetaData",
+                    alias: "e-Stat Meta Data",
+                    columns: metaCols
+                };
+
+                schemaCallback([dataTableSchema, metaTableSchema]); // 2つのテーブルスキーマを渡す
             };
 
             myConnector.getData = function(table, doneCallback) {
@@ -58,34 +75,50 @@
                 var apiUrl = tableau.connectionData.apiUrl;
                 var startPosition = 1;
                 var tableData = [];
+                var metaTableData = []; // メタ情報用の配列
 
                 function fetchData() {
                     $.getJSON(apiUrl + startPosition, function(resp) {
-                         if (!resp || !resp.GET_STATS_DATA || !resp.GET_STATS_DATA.STATISTICAL_DATA || !resp.GET_STATS_DATA.DATA_INF || !resp.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) {
+                        if (!resp || !resp.GET_STATS_DATA || !resp.GET_STATS_DATA.STATISTICAL_DATA || !resp.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF || !resp.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) {
                             $("#status").text("データ構造が予期せぬ形式です。APIレスポンスを確認してください。");
                             return;
                         }
 
                         var data = resp.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE;
                         if (data && data.length > 0) {
-                            // サンプルデータを tableau.connectionData に格納 (最初の10件)
                             tableau.connectionData.sampleData = JSON.stringify(data.slice(0, 10));
 
                             for (var i = 0; i < data.length; i++) {
                                 var row = {};
                                 for (var key in data[i]) {
                                     if (data[i].hasOwnProperty(key)) {
-                                        row[key] = (key === "$" || key.toLowerCase() === "value") ? parseFloat(data[i][key]) : data[i][key];
+                                        row[key.replace("@", "")] = (key === "$" || key.toLowerCase() === "value") ? parseFloat(data[i][key]) : data[i][key]; // "@" を削除
                                     }
                                 }
                                 tableData.push(row);
+                            }
+
+                            // メタ情報を抽出 (例: CLASS_INF)
+                            if (resp.GET_STATS_DATA.STATISTICAL_DATA.CLASS_INF && resp.GET_STATS_DATA.STATISTICAL_DATA.CLASS_INF.CLASS_OBJ) {
+                                var classObjs = resp.GET_STATS_DATA.STATISTICAL_DATA.CLASS_INF.CLASS_OBJ;
+                                for (var i = 0; i < classObjs.length; i++) {
+                                    var metaRow = {
+                                        "class_cat": classObjs[i].CLASS,
+                                        "class_name": classObjs[i].CLASS_NAME
+                                    };
+                                    metaTableData.push(metaRow);
+                                }
                             }
 
                             if (data.length > 0) {
                                 startPosition += data.length;
                                 fetchData();
                             } else {
-                                table.appendRows(tableData);
+                                table.appendRows(tableData); // データテーブルにデータを追加
+                                if (table.tableInfo.id === "estatMetaData") {
+                                    table.appendRows(metaTableData); // メタ情報テーブルにデータを追加
+                                }
+
                                 doneCallback();
                                 $("#status").text("データ取得完了！");
                             }
@@ -117,7 +150,7 @@
     </script>
 </head>
 <body>
-    <h1>e-Stat Web Data Connector</h1>
+    <h1>e-Stat Web Data Connector (Multiple Tables)</h1>
     <p>APIキーとAPIリクエストURLを入力してください。</p>
     <form>
         <label for="appId">APIキー:</label>
